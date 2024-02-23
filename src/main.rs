@@ -3,6 +3,8 @@ use std::env::var;
 use axum::{extract::State, response::IntoResponse as IntoRes, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::{query, PgPool};
+use tracing::{error, info};
+use tracing_subscriber::{fmt::time::LocalTime, EnvFilter};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct User {
@@ -33,6 +35,12 @@ struct ChatRoom {
 }
 
 #[derive(Debug, Deserialize)]
+struct Message {
+    text: String,
+    room_id: i32,
+}
+
+#[derive(Debug, Deserialize)]
 struct EnterRoom {
     room_id: i32,
     room_name: String,
@@ -53,18 +61,17 @@ VALUES ( $1, $2 );
     .execute(&pool)
     .await;
 
-    println!("{:#?}", result);
-
     match result {
         Ok(res) => {
-            if res.rows_affected() <= 1 {
+            if 0 < res.rows_affected() {
+                info!("ユーザーを登録しました: {:#?}", user);
                 return Json(SqlResult {
                     message: "ユーザーの追加に成功しました".to_string(),
                     data: Some(true),
                 });
             }
         }
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
@@ -101,7 +108,7 @@ WHERE id = $1;
                 data: Some(vec),
             });
         }
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
@@ -124,29 +131,27 @@ WHERE id = $1 AND name = $2 AND password = $3;
     .execute(&pool)
     .await;
 
-    println!("{:#?}", result);
-
     match result {
         Ok(res) => {
             if 0 < res.rows_affected() {
+                info!("ユーザーを削除しました:\n{:?}", user);
                 return Json(SqlResult {
                     message: "削除に成功しました!".to_string(),
-                    data: Some(res.rows_affected()),
+                    data: Some(true),
                 });
             }
         }
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
         message: "削除するUserが見つかりませんでした".to_string(),
-        data: Some(0),
+        data: None,
     })
 }
 
 // 新しく部屋を作る
 async fn create_room(State(pool): State<PgPool>, Json(room): Json<EnterRoom>) -> impl IntoRes {
-    println!("{:#?}", room);
     let result = query!(
         r#"
 INSERT INTO chat_room ( name, password )
@@ -158,17 +163,16 @@ VALUES ( $1, $2 );
     .execute(&pool)
     .await;
 
-    println!("{:#?}", result);
-
     match result {
         Ok(_) => {
+            info!("新しく部屋を作成しました: \n{:?}", room);
             return Json(SqlResult {
                 message: "部屋の作成に成功しました".to_string(),
                 data: Some(true),
             });
         }
 
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
@@ -179,7 +183,6 @@ VALUES ( $1, $2 );
 
 // 部屋に入る
 async fn enter_room(State(pool): State<PgPool>, Json(room): Json<EnterRoom>) -> impl IntoRes {
-    println!("{:#?}", room);
     // chat_roomテーブルのuser_listにidを追加する
     let result = query!(
         r#"
@@ -195,17 +198,16 @@ WHERE id = $2 AND name = $3 AND password = $4;
     .execute(&pool)
     .await;
 
-    println!("enter room {:#?}", result);
-
     match result {
         Ok(_) => {
+            info!("enter room \n{:?}", room);
             return Json(SqlResult {
                 message: "入室に成功しました".to_string(),
                 data: Some(true),
             });
         }
 
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
@@ -214,13 +216,7 @@ WHERE id = $2 AND name = $3 AND password = $4;
     })
 }
 
-#[derive(Debug, Deserialize)]
-struct Message {
-    text: String,
-    room_id: i32,
-}
-
-//
+// 送られてきた部屋のメッセージリストを返す
 async fn message_get(State(pool): State<PgPool>, Json(room_id): Json<i32>) -> impl IntoRes {
     println!("get to {}", room_id);
     let result = query!(
@@ -236,17 +232,18 @@ WHERE id = $1
 
     match result {
         Ok(data) => {
+            // info!("メッセージを渡します");
             let data = data.message.unwrap();
             return Json(SqlResult {
                 message: "メッセージの読み取りに成功".to_string(),
                 data: Some(data),
             });
         }
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
-        message: "メッセージの読み取りに成功".to_string(),
+        message: "メッセージの読み取りに失敗".to_string(),
         data: None,
     })
 }
@@ -267,22 +264,32 @@ WHERE id = $2;
 
     match result {
         Ok(_) => {
+            info!("受信したメッセージの保存に成功");
             return Json(SqlResult {
                 message: "メッセージの送信に成功".to_string(),
                 data: Some(true),
             });
         }
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 
     Json(SqlResult {
-        message: "メッセージの送信に成功".to_string(),
+        message: "メッセージの送信に失敗".to_string(),
         data: None,
     })
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv()?;
+    tracing_subscriber::fmt()
+        .with_timer(LocalTime::rfc_3339())
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+    info!("Hello, Server!");
+
     let pool = PgPool::connect(&var("DATABASE_URL").expect("環境変数が見つかりません")).await?;
 
     let app = Router::new()

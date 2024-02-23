@@ -14,3 +14,12 @@ sqlx = { version = "0.7.3", features = [
   "runtime-tokio-native-tls",
 ] }
 serde = { version = "1.0.194", features = ["derive"] }
+
+dotenvy = "0.15.7"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = [
+  "std",
+  "env-filter",
+  "time",
+  "local-time",
+] }
